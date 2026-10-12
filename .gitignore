@@ -1,0 +1,77 @@
+# OSX
+#
+.DS_Store
+
+# Xcode
+#
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata
+*.xccheckout
+*.moved-aside
+DerivedData
+*.hmap
+*.ipa
+*.xcuserstate
+project.xcworkspace
+
+# Android/IntelliJ
+#
+build/
+.idea
+.gradle
+local.properties
+*.iml
+
+# node.js
+#
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# BUCK
+buck-out/
+\.buckd/
+*.keystore
+
+# fastlane
+#
+# It is recommended to not store the screenshots in the git repo. Instead, use fastlane to re-generate the
+# screenshots whenever they are needed.
+# For more information about the recommended setup visit:
+# https://docs.fastlane.tools/best-practices/source-control/
+
+*/fastlane/report.xml
+*/fastlane/Preview.html
+*/fastlane/screenshots
+
+# Bundle artifact
+*.jsbundle
+
+# font resource(link will update)
+android/app/src/main/assets/fonts/*
+
+# signing secret (do not commit the keystore or its passwords)
+*.keystore
+*.jks
+keystore.properties
+android/keystore.properties
+android/gradle-keystore.properties
+
+# local machine only
+local.properties
+android/local.properties
+android/app/src/main/assets/index.android.bundle
+
+# toolchain / scratch (if ever copied into tree)
+_sdk/
+_npm_cache/
+_npm_cache2/
+node-v12.22.12-win-x64/
