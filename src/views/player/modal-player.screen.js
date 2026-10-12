@@ -7,6 +7,7 @@ import ModalLiteContainer from './modal-lite-container.screen';
 import PlayerControl from './player-control.screen';
 import PlayerNav from './player-nav.screen';
 import PlayerInfo from './player-info.screen';
+import Lyrics from './lyrics.screen';
 import {
   togglePlay,
   toggleModal,
@@ -169,6 +170,10 @@ class ModalPlayerView extends React.Component {
           nowplayingTrack={this.props.playerState.nowplayingTrack}
           isFav={isFav}
           onFav={this.onFav}
+        />
+        <Lyrics
+          track={this.props.playerState.nowplayingTrack}
+          current={this.props.playerState.current}
         />
         <View style={styles.sliderBtn}>
           <ModalSongTime>

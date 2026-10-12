@@ -1,0 +1,180 @@
+import React from 'react';
+import { View, ScrollView, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
+import styled, { withTheme } from 'styled-components';
+import { getLyrics, hasLyrics } from '../../api/lyric';
+
+const Container = styled.View`
+  flex: 1;
+  margin-top: 8;
+  min-height: 120;
+  align-items: center;
+  justify-content: flex-start;
+`;
+
+const ScrollWrap = styled(ScrollView)`
+  flex: 1;
+  align-self: stretch;
+  padding-horizontal: 6;
+`;
+
+const Line = styled(View)`
+  padding-vertical: 6;
+  padding-horizontal: 8;
+  border-radius: 6;
+`;
+
+const Origin = styled.Text`
+  font-size: ${(props) => (props.active ? 17 : 15)};
+  font-weight: ${(props) => (props.active ? 'bold' : 'normal')};
+  color: ${(props) => (props.active ? props.theme.primaryColor : props.theme.secondaryColor)};
+  text-align: center;
+`;
+
+const Sub = styled.Text`
+  font-size: 12;
+  margin-top: ${(props) => (props.active ? 3 : 1)};
+  color: ${(props) => props.theme.secondaryColor};
+  opacity: ${(props) => (props.active ? 0.95 : 0.55)};
+  text-align: center;
+`;
+
+const Label = styled.Text`
+  font-size: 11;
+  margin-top: 2;
+  color: ${(props) => props.theme.secondaryColor};
+  opacity: 0.55;
+  text-align: center;
+`;
+
+const Tip = styled.Text`
+  margin-top: 8;
+  font-size: 13;
+  color: ${(props) => props.theme.secondaryColor};
+  opacity: 0.7;
+  text-align: center;
+`;
+
+function resolveActiveIndex(lines, current) {
+  // Find the last line whose time <= current time.
+  let idx = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (lines[i].time <= current + 0.05) {
+      idx = i;
+    } else {
+      break;
+    }
+  }
+  return idx;
+}
+
+class Lyrics extends React.PureComponent {
+  props: {
+    track: Object,
+    current: Number,
+    theme: Object,
+  };
+  constructor(props) {
+    super(props);
+    this.state = { lines: [], found: false, loading: false, noLyricTag: '' };
+    this.scrollRef = React.createRef();
+  }
+
+  componentDidMount() {
+    this.loadLyrics(this.props.track);
+  }
+
+  componentWillReceiveProps(nextProps) {
+    if (nextProps.track !== this.props.track) {
+      this.loadLyrics(nextProps.track);
+    }
+  }
+
+  loadLyrics(track) {
+    if (!track) {
+      this.setState({ lines: [], found: false, loading: false, noLyricTag: '请选择歌曲' });
+      return;
+    }
+    this.setState({ loading: true, lines: [], found: false, noLyricTag: '' });
+    getLyrics(track).then((res) => {
+      if (!hasLyrics(res)) {
+        this.setState({ loading: false, lines: [], found: false, noLyricTag: '暂无歌词' });
+        return;
+      }
+      this.setState({ loading: false, lines: res.lines, found: true });
+    });
+  }
+
+  scrollToActive(index) {
+    if (!this.scrollRef.current) {
+      return;
+    }
+    // Rough per-line height (origin + optional sub line) ~ 34px
+    const y = Math.max(0, index * 36 - 90);
+    this.scrollRef.current.scrollTo({ y, animated: true });
+  }
+
+  componentDidUpdate(prevProps) {
+    if (this.props.current !== prevProps.current && this.state.lines.length) {
+      const idx = resolveActiveIndex(this.state.lines, this.props.current);
+      this.scrollToActive(idx);
+    }
+  }
+
+  render() {
+    const { track, current, theme } = this.props;
+    const { lines, found, loading, noLyricTag } = this.state;
+    const noTrack = track === null;
+
+    if (loading) {
+      return (
+        <Container>
+          <ActivityIndicator size="small" color={theme.primaryColor} />
+        </Container>
+      );
+    }
+
+    if (!found) {
+      return (
+        <Container>
+          <Tip>{noTrack ? '请选择歌曲' : noLyricTag || '暂无歌词'}</Tip>
+        </Container>
+      );
+    }
+
+    const idx = resolveActiveIndex(lines, current || 0);
+
+    return (
+      <Container>
+        <ScrollWrap ref={this.scrollRef}>
+          <View style={{ paddingBottom: 80 }}>
+            {lines.map((line, i) => {
+              const active = i === idx;
+              return (
+                <Line key={`${line.time}-${i}`}>
+                  <Origin active={active} theme={theme}>
+                    {line.text}
+                  </Origin>
+                  {line.trans ? (
+                    <Sub active={active} theme={theme}>
+                      {line.trans}
+                    </Sub>
+                  ) : null}
+                  {line.roma ? (
+                    <Sub active={active} theme={theme}>
+                      {line.roma}
+                    </Sub>
+                  ) : null}
+                  {line.trans || line.roma ? (
+                    <Label theme={theme}>{line.roma ? '罗马音' : '翻译'}</Label>
+                  ) : null}
+                </Line>
+              );
+            })}
+          </View>
+        </ScrollWrap>
+      </Container>
+    );
+  }
+}
+
+export default withTheme(Lyrics);

@@ -221,6 +221,87 @@ function parseUrl(url) {
   return result;
 }
 
+// Parse an LRC block into [{time, text}] where time is seconds (fractional).
+function parseLrc(lrcText) {
+  if (!lrcText) {
+    return [];
+  }
+  const lines = lrcText.split(/\r?\n/);
+  const result = [];
+  const timeRe = /\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+
+  for (const line of lines) {
+    // Skip blank/meta lines that carry no time stamp
+    if (!line || !timeRe.test(line)) {
+      continue;
+    }
+    timeRe.lastIndex = 0;
+    const stamps = [];
+    let m;
+    while ((m = timeRe.exec(line)) !== null) {
+      const min = parseInt(m[1], 10);
+      const sec = parseInt(m[2], 10);
+      let frac = 0;
+      if (m[3]) {
+        frac = parseInt(m[3].padEnd(3, '0').slice(0, 3), 10) / 1000;
+      }
+      stamps.push(min * 60 + sec + frac);
+    }
+    const text = line.replace(timeRe, '').replace(/^\s+/, '');
+    if (!text.trim()) {
+      continue;
+    }
+    for (const t of stamps) {
+      result.push({ time: t, text });
+    }
+  }
+  result.sort((a, b) => a.time - b.time);
+  return result;
+}
+
+// Fetch netease lyrics for a given netease song id and return a normalized
+// line list [{time, text, trans, roma}]. Original lyrics + translation +
+// romaji all come straight from the netease lyric endpoint (no membership).
+function getLyric(trackOrId) {
+  let songId = trackOrId;
+  if (typeof trackOrId === 'object') {
+    // id is 'netrack_<neteaseSongId>' or the raw id
+    songId = String(trackOrId.id || trackOrId).replace('netrack_', '');
+  }
+  songId = String(songId).replace('netrack_', '');
+  const url = 'https://music.163.com/weapi/song/lyric';
+
+  const data = {
+    id: songId,
+    lv: 1,
+    tv: -1,
+    rv: -1,
+    kv: -1,
+  };
+
+  return requestAPI(url, data).then((resData) => {
+    if (!resData || !resData.lrc || !resData.lrc.lyric) {
+      return { lines: [], found: false };
+    }
+    const origin = parseLrc(resData.lrc.lyric);
+    const trans = parseLrc(resData.tlyric && resData.tlyric.lyric);
+    const roma = parseLrc(resData.romalrc && resData.romalrc.lyric);
+
+    const lines = origin.map((l) => {
+      // Match translation/romaji to nearest time (within 0.5s tolerance).
+      const transLine = trans.find((t) => Math.abs(t.time - l.time) < 0.5);
+      const romaLine = roma.find((r) => Math.abs(r.time - l.time) < 0.5);
+      return {
+        time: l.time,
+        text: l.text,
+        trans: transLine ? transLine.text : '',
+        roma: romaLine ? romaLine.text : '',
+      };
+    });
+    return { lines, found: lines.length > 0 };
+  });
+}
+
 const meta = { name: '网易', platformId: 'ne', enName: 'netease' };
 
 export default {
@@ -230,4 +311,5 @@ export default {
   bootstrapTrack,
   search,
   parseUrl,
+  getLyric,
 };
