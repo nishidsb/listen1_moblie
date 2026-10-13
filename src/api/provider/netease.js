@@ -192,6 +192,59 @@ function search(keyword, page) {
   });
 }
 
+// Legacy search endpoint with a fresh anonymous ntes cookie. cloudsearch is
+// rate-limited for anonymous clients (code 50000005); api/search/pc with the
+// _ntes_* cookie works reliably and is enough for lyric lookups.
+function searchByTitle(keyword) {
+  let nuid = '';
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  for (let i = 0; i < 32; i += 1) {
+    nuid += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  const cookie = `_ntes_nuid=${nuid}; _ntes_nnid3=${nuid},${Date.now()}; NMTID=0`;
+
+  const body = queryString.stringify({
+    s: keyword,
+    offset: 0,
+    limit: 20,
+    type: 1,
+  });
+
+  return fetch('https://music.163.com/api/search/pc', {
+    method: 'POST',
+    headers: {
+      referer: 'https://music.163.com/',
+      'content-type': 'application/x-www-form-urlencoded',
+      cookie,
+      'user-agent':
+        'Mozilla/5.0 (Linux; U; Android 8.1.0; zh-cn; BLA-AL00 Build/HUAWEIBLA-AL00) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/57.0.2987.132 MQQBrowser/8.9 Mobile Safari/537.36',
+    },
+    body,
+  })
+    .then((response) => {
+      return response.json();
+    })
+    .then((resData) => {
+      if (!resData || resData.code !== 200 || !resData.result) {
+        return { result: [], total: 0 };
+      }
+      const tracks = (resData.result.songs || []).map((song) => ({
+        id: `netrack_${song.id}`,
+        title: song.name,
+        artist: song.artists && song.artists.length > 0 ? song.artists[0].name : '',
+        album: song.album ? song.album.name : '',
+        source: 'netease',
+        source_url: `http://music.163.com/#/song?id=${song.id}`,
+        img_url: song.album ? song.album.picUrl : '',
+        url: `netrack_${song.id}`,
+      }));
+      return { result: tracks, total: resData.result.songCount || 0 };
+    })
+    .catch(() => {
+      return { result: [], total: 0 };
+    });
+}
+
 function parseUrl(url) {
   let result = null;
 
@@ -243,7 +296,10 @@ function parseLrc(lrcText) {
       const sec = parseInt(m[2], 10);
       let frac = 0;
       if (m[3]) {
-        frac = parseInt(m[3].padEnd(3, '0').slice(0, 3), 10) / 1000;
+        // '4'->400ms '46'->460ms '466'->466ms; avoids padEnd (ES2017, not
+        // guaranteed on RN 0.59's old Android JSC)
+        const fs = m[3].length === 1 ? `${m[3]}00` : m[3].length === 2 ? `${m[3]}0` : m[3];
+        frac = parseInt(fs, 10) / 1000;
       }
       stamps.push(min * 60 + sec + frac);
     }
@@ -310,6 +366,7 @@ export default {
   getPlaylist,
   bootstrapTrack,
   search,
+  searchByTitle,
   parseUrl,
   getLyric,
 };

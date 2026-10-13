@@ -38,13 +38,14 @@ function scoreMatch(title, artist, song) {
 }
 
 // Find the best matching netease song id for an arbitrary-origin track.
-// Uses the same cloudsearch channel the app's search already uses.
+// Uses the legacy search/pc endpoint (with anonymous ntes cookie) because
+// cloudsearch is rate-limited for anonymous clients.
 function findNeteaseId(track) {
   const keyword = `${titleKey(track.title)} ${track.artist || ''}`.trim();
   if (!keyword) {
     return Promise.resolve(null);
   }
-  return netease.search(keyword, 1).then((res) => {
+  return netease.searchByTitle(keyword).then((res) => {
     const tracks = res && res.result ? res.result : [];
     if (!tracks.length) {
       return null;
