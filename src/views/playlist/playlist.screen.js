@@ -168,6 +168,9 @@ class Playlist extends React.Component {
     ).then(({ done, matched }) => {
       this.setState({ filling: false });
       showToast(`歌词补齐完成：${matched}/${done} 首有歌词`);
+    }).catch(() => {
+      this.setState({ filling: false });
+      showToast('网络受限，已暂停补齐，请稍后再试');
     });
   }
   render() {

@@ -42,6 +42,17 @@ function nePacedRequest(doRequest) {
   return run;
 }
 
+// A hung request (e.g. okhttp OOM mid-response kills the RN network callback
+// without settling the JS promise) must never stall a batch: race a 15s
+// timeout that resolves null, which callers treat as a failed request.
+const NE_TIMEOUT = 15000;
+function withTimeout(promise) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(null), NE_TIMEOUT)),
+  ]);
+}
+
 function postForm(url, body) {
   return fetch(url, {
     method: 'POST',
@@ -78,7 +89,7 @@ function searchSongsRaw(keyword) {
     'https://music.163.com/api/search/get',
   ];
   const attempt = (idx) =>
-    nePacedRequest(() => postForm(endpoints[idx], body)).then((resData) => {
+    nePacedRequest(() => withTimeout(postForm(endpoints[idx], body))).then((resData) => {
       if (resData && resData.code === 200 && resData.result && resData.result.songs) {
         return resData.result.songs.map((song) => ({
           id: song.id,
@@ -104,7 +115,7 @@ function getLyricRaw(songId) {
     rv: -1,
     kv: -1,
   };
-  return nePacedRequest(() => requestAPI(url, data)).then((resData) => {
+  return nePacedRequest(() => withTimeout(requestAPI(url, data))).then((resData) => {
     if (!resData || !resData.lrc) {
       return null;
     }

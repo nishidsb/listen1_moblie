@@ -190,14 +190,23 @@ export function strongScore(query, name, artistNames, rawTitle) {
 }
 
 // -------------------------------------------------------------------- cache
-// lyric_cache_<trackId> -> JSON {neteaseId, songName, lyric, tlyric, romalrc}
-// or {miss:1} (negative result, still cached to avoid re-querying the API).
-const CACHE_PREFIX = 'lyric_cache_';
+// lyric_cache_v2_<trackId> -> JSON {neteaseId, songName, lyric, tlyric, romalrc}
+// or {miss:1, at} (negative result; retried after 24h so a temporarily
+// blocked network never poisons the cache permanently).
+const CACHE_PREFIX = 'lyric_cache_v2_';
+const MISS_TTL = 24 * 60 * 60 * 1000;
 const inflight = {};
 
 function readCache(trackId) {
   return AsyncStorage.getItem(CACHE_PREFIX + trackId)
-    .then((s) => (s ? JSON.parse(s) : null))
+    .then((s) => {
+      if (!s) return null;
+      const entry = JSON.parse(s);
+      if (entry && entry.miss && Date.now() - (entry.at || 0) > MISS_TTL) {
+        return null;
+      }
+      return entry;
+    })
     .catch(() => null);
 }
 function writeCache(trackId, entry) {
@@ -377,44 +386,65 @@ export function findAlternativeSource(track) {
 // ------------------------------------------------------------ batch backfill
 // Fill lyrics for every track of a playlist that has no cache entry yet.
 // onProgress(done, total, title); cancelled() -> true aborts the loop.
+// Aborts (rejects {aborted:true}) after 8 consecutive misses — that pattern
+// means the netease endpoints are blocked/rate-limiting right now, and
+// grinding on would only poison the negative cache.
 // Returns { done, matched }.
 export function fillPlaylistLyrics(tracks, onProgress, cancelled) {
   const list = (tracks || []).slice();
   let done = 0;
   let matched = 0;
+  let consecutiveMiss = 0;
 
-  const step = (i) => {
-    if (cancelled && cancelled()) {
-      if (onProgress) onProgress(done, list.length, '');
-      return Promise.resolve({ done, matched });
-    }
-    if (i >= list.length) {
-      if (onProgress) onProgress(done, list.length, '');
-      return Promise.resolve({ done, matched });
-    }
-    const t = list[i];
-    return readCache(t.id)
-      .then((cached) => {
-        if (cached) {
-          if (!cached.miss) matched += 1;
+  return new Promise((resolve, reject) => {
+    const step = (i) => {
+      if (cancelled && cancelled()) {
+        if (onProgress) onProgress(done, list.length, '');
+        return resolve({ done, matched });
+      }
+      if (i >= list.length) {
+        if (onProgress) onProgress(done, list.length, '');
+        return resolve({ done, matched });
+      }
+      const t = list[i];
+      readCache(t.id)
+        .then((cached) => {
+          if (cached) {
+            if (!cached.miss) {
+              matched += 1;
+            }
+            consecutiveMiss = 0;
+            done += 1;
+            if (onProgress) onProgress(done, list.length, t.title);
+            return step(i + 1);
+          }
+          return preloadLyric(t).then((entry) => {
+            if (entry && !entry.miss) {
+              matched += 1;
+              consecutiveMiss = 0;
+            } else {
+              consecutiveMiss += 1;
+            }
+            done += 1;
+            if (onProgress) onProgress(done, list.length, t.title);
+            if (consecutiveMiss >= 8) {
+              return reject({ aborted: true, done, matched });
+            }
+            return step(i + 1);
+          });
+        })
+        .catch(() => {
           done += 1;
+          consecutiveMiss += 1;
           if (onProgress) onProgress(done, list.length, t.title);
-          return step(i + 1);
-        }
-        return preloadLyric(t).then((entry) => {
-          if (entry && !entry.miss) matched += 1;
-          done += 1;
-          if (onProgress) onProgress(done, list.length, t.title);
+          if (consecutiveMiss >= 8) {
+            return reject({ aborted: true, done, matched });
+          }
           return step(i + 1);
         });
-      })
-      .catch(() => {
-        done += 1;
-        if (onProgress) onProgress(done, list.length, t.title);
-        return step(i + 1);
-      });
-  };
-  return step(0);
+    };
+    step(0);
+  });
 }
 
 export function hasLyrics(result) {
