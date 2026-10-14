@@ -62,6 +62,35 @@ function handleAddToMyPlaylist(state, action) {
   };
 }
 
+// Stamp the resolved netease song id onto every stored copy of a track so
+// future lyric loads skip the search cascade (lyric texts live in the
+// AsyncStorage lyric cache).
+function handleAttachTrackLyric(state, action) {
+  const { trackId, neteaseId } = action.payload;
+  const nextDict = {};
+  const keys = Object.keys(state.myPlaylistDict);
+  let changed = false;
+  for (let i = 0; i < keys.length; i += 1) {
+    const pl = state.myPlaylistDict[keys[i]];
+    let touched = false;
+    const tracks = (pl.tracks || []).map(t => {
+      if (t.id === trackId && t.neteaseId !== neteaseId) {
+        touched = true;
+        return { ...t, neteaseId };
+      }
+      return t;
+    });
+    if (touched) {
+      changed = true;
+      nextDict[keys[i]] = { ...pl, tracks };
+    } else {
+      nextDict[keys[i]] = pl;
+    }
+  }
+  if (!changed) return state;
+  return { ...state, myPlaylistDict: nextDict };
+}
+
 function handleAddToMyFavorite(state, action) {
   const { payload: track } = action;
 
@@ -190,6 +219,8 @@ export const myPlaylistReducer = (state = defaultmyPlaylistState, action) => {
       return handleAddToMyFavorite(state, action);
     case TYPE.REMOVE_FROM_MY_FAVORITE:
       return handleRemoveFromMyFavorite(state, action);
+    case TYPE.ATTACH_TRACK_LYRIC:
+      return handleAttachTrackLyric(state, action);
     case TYPE.RECOVER_DATA:
       return { ...action.payload.myPlaylistState };
     default:

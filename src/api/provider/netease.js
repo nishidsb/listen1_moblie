@@ -2,6 +2,120 @@
 import queryString from 'query-string';
 import { weapi } from '../../modules/crypto';
 
+// Anonymous session cookie, created once per app session. Rotating cookies
+// per request is a crawl signature and gets the whole IP banned (observed
+// 405 WAF bans lasting 5-15 minutes during lyric matching tests).
+const NTES_COOKIE = (() => {
+  let nuid = '';
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  for (let i = 0; i < 32; i += 1) {
+    nuid += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return `_ntes_nuid=${nuid}; _ntes_nnid3=${nuid},${Date.now()}; NMTID=0`;
+})();
+
+// Global paced queue for anonymous netease endpoints. Measured safe rhythm is
+// >=2.5s between requests; faster bursts trigger 405/406 WAF bans. Backoff
+// 10s/30s before giving up, then a 5-minute cooldown so a ban can expire
+// instead of being extended by retries.
+let neChain = Promise.resolve();
+let neLastAt = 0;
+let neCooldownUntil = 0;
+const NE_GAP = 2500;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function nePacedRequest(doRequest) {
+  const run = neChain.then(async () => {
+    if (Date.now() < neCooldownUntil) {
+      await sleep(neCooldownUntil - Date.now());
+    }
+    const gap = NE_GAP + Math.floor(Math.random() * 600);
+    const since = Date.now() - neLastAt;
+    if (since < gap) {
+      await sleep(gap - since);
+    }
+    neLastAt = Date.now();
+    return doRequest();
+  });
+  // keep the queue alive when a caller does not catch
+  neChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+function postForm(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: {
+      referer: 'https://music.163.com/',
+      'content-type': 'application/x-www-form-urlencoded',
+      cookie: NTES_COOKIE,
+      'user-agent':
+        'Mozilla/5.0 (Linux; U; Android 8.1.0; zh-cn; BLA-AL00 Build/HUAWEIBLA-AL00) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/57.0.2987.132 MQQBrowser/8.9 Mobile Safari/537.36',
+    },
+    body,
+  })
+    .then((response) => {
+      if (response.status === 405 || response.status === 406) {
+        return { code: response.status };
+      }
+      return response.json();
+    })
+    .catch(() => null);
+}
+
+// Legacy song search with degraded endpoint. cloudsearch is rate-limited for
+// anonymous clients (code 50000005); api/search/pc with the _ntes_* cookie
+// works, and api/search/get takes the same params/shape as a fallback.
+function searchSongsRaw(keyword) {
+  const body = queryString.stringify({
+    s: keyword,
+    offset: 0,
+    limit: 20,
+    type: 1,
+  });
+  const endpoints = [
+    'https://music.163.com/api/search/pc',
+    'https://music.163.com/api/search/get',
+  ];
+  const attempt = (idx) =>
+    nePacedRequest(() => postForm(endpoints[idx], body)).then((resData) => {
+      if (resData && resData.code === 200 && resData.result && resData.result.songs) {
+        return resData.result.songs.map((song) => ({
+          id: song.id,
+          name: song.name,
+          artists: (song.artists || []).map((a) => a.name),
+        }));
+      }
+      if (idx + 1 < endpoints.length && (!resData || resData.code === 405 || resData.code === 406 || resData.code === -460 || resData.code === -462)) {
+        return attempt(idx + 1);
+      }
+      return [];
+    });
+  return attempt(0);
+}
+
+// Raw lyric fetch for the matcher engine (paced). Returns null when blocked.
+function getLyricRaw(songId) {
+  const url = 'https://music.163.com/weapi/song/lyric';
+  const data = {
+    id: String(songId),
+    lv: 1,
+    tv: -1,
+    rv: -1,
+    kv: -1,
+  };
+  return nePacedRequest(() => requestAPI(url, data)).then((resData) => {
+    if (!resData || !resData.lrc) {
+      return null;
+    }
+    return {
+      lyric: resData.lrc.lyric || '',
+      tlyric: (resData.tlyric && resData.tlyric.lyric) || '',
+      romalrc: (resData.romalrc && resData.romalrc.lyric) || '',
+    };
+  });
+}
+
 function requestAPI(url, data) {
   return fetch(url, {
     method: 'POST',
@@ -192,57 +306,21 @@ function search(keyword, page) {
   });
 }
 
-// Legacy search endpoint with a fresh anonymous ntes cookie. cloudsearch is
-// rate-limited for anonymous clients (code 50000005); api/search/pc with the
-// _ntes_* cookie works reliably and is enough for lyric lookups.
+// Legacy search endpoint with the session ntes cookie (see NTES_COOKIE note).
 function searchByTitle(keyword) {
-  let nuid = '';
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  for (let i = 0; i < 32; i += 1) {
-    nuid += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  const cookie = `_ntes_nuid=${nuid}; _ntes_nnid3=${nuid},${Date.now()}; NMTID=0`;
-
-  const body = queryString.stringify({
-    s: keyword,
-    offset: 0,
-    limit: 20,
-    type: 1,
-  });
-
-  return fetch('https://music.163.com/api/search/pc', {
-    method: 'POST',
-    headers: {
-      referer: 'https://music.163.com/',
-      'content-type': 'application/x-www-form-urlencoded',
-      cookie,
-      'user-agent':
-        'Mozilla/5.0 (Linux; U; Android 8.1.0; zh-cn; BLA-AL00 Build/HUAWEIBLA-AL00) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/57.0.2987.132 MQQBrowser/8.9 Mobile Safari/537.36',
-    },
-    body,
-  })
-    .then((response) => {
-      return response.json();
-    })
-    .then((resData) => {
-      if (!resData || resData.code !== 200 || !resData.result) {
-        return { result: [], total: 0 };
-      }
-      const tracks = (resData.result.songs || []).map((song) => ({
-        id: `netrack_${song.id}`,
-        title: song.name,
-        artist: song.artists && song.artists.length > 0 ? song.artists[0].name : '',
-        album: song.album ? song.album.name : '',
-        source: 'netease',
-        source_url: `http://music.163.com/#/song?id=${song.id}`,
-        img_url: song.album ? song.album.picUrl : '',
-        url: `netrack_${song.id}`,
-      }));
-      return { result: tracks, total: resData.result.songCount || 0 };
-    })
-    .catch(() => {
-      return { result: [], total: 0 };
-    });
+  return searchSongsRaw(keyword).then((songs) => ({
+    result: songs.map((song) => ({
+      id: `netrack_${song.id}`,
+      title: song.name,
+      artist: song.artists && song.artists.length > 0 ? song.artists[0].name : '',
+      album: '',
+      source: 'netease',
+      source_url: `http://music.163.com/#/song?id=${song.id}`,
+      img_url: '',
+      url: `netrack_${song.id}`,
+    })),
+    total: songs.length,
+  }));
 }
 
 function parseUrl(url) {
@@ -275,8 +353,7 @@ function parseUrl(url) {
 }
 
 // Parse an LRC block into [{time, text}] where time is seconds (fractional).
-function parseLrc(lrcText) {
-  if (!lrcText) {
+function parseLrc(lrcText) {  if (!lrcText) {
     return [];
   }
   const lines = lrcText.split(/\r?\n/);
@@ -315,6 +392,31 @@ function parseLrc(lrcText) {
   return result;
 }
 
+// Merge raw lrc/tlyric/romalrc texts into normalized lines
+// [{time, text, trans, roma}]. Translation/romaji are matched to the nearest
+// original line within a 0.5s tolerance.
+function parseLyricTexts(raw) {
+  const lyricText = raw && raw.lyric ? raw.lyric : '';
+  if (!lyricText) {
+    return { lines: [], found: false };
+  }
+  const origin = parseLrc(lyricText);
+  const trans = parseLrc(raw.tlyric);
+  const roma = parseLrc(raw.romalrc);
+
+  const lines = origin.map((l) => {
+    const transLine = trans.find((t) => Math.abs(t.time - l.time) < 0.5);
+    const romaLine = roma.find((r) => Math.abs(r.time - l.time) < 0.5);
+    return {
+      time: l.time,
+      text: l.text,
+      trans: transLine ? transLine.text : '',
+      roma: romaLine ? romaLine.text : '',
+    };
+  });
+  return { lines, found: lines.length > 0 };
+}
+
 // Fetch netease lyrics for a given netease song id and return a normalized
 // line list [{time, text, trans, roma}]. Original lyrics + translation +
 // romaji all come straight from the netease lyric endpoint (no membership).
@@ -325,37 +427,7 @@ function getLyric(trackOrId) {
     songId = String(trackOrId.id || trackOrId).replace('netrack_', '');
   }
   songId = String(songId).replace('netrack_', '');
-  const url = 'https://music.163.com/weapi/song/lyric';
-
-  const data = {
-    id: songId,
-    lv: 1,
-    tv: -1,
-    rv: -1,
-    kv: -1,
-  };
-
-  return requestAPI(url, data).then((resData) => {
-    if (!resData || !resData.lrc || !resData.lrc.lyric) {
-      return { lines: [], found: false };
-    }
-    const origin = parseLrc(resData.lrc.lyric);
-    const trans = parseLrc(resData.tlyric && resData.tlyric.lyric);
-    const roma = parseLrc(resData.romalrc && resData.romalrc.lyric);
-
-    const lines = origin.map((l) => {
-      // Match translation/romaji to nearest time (within 0.5s tolerance).
-      const transLine = trans.find((t) => Math.abs(t.time - l.time) < 0.5);
-      const romaLine = roma.find((r) => Math.abs(r.time - l.time) < 0.5);
-      return {
-        time: l.time,
-        text: l.text,
-        trans: transLine ? transLine.text : '',
-        roma: romaLine ? romaLine.text : '',
-      };
-    });
-    return { lines, found: lines.length > 0 };
-  });
+  return getLyricRaw(songId).then((raw) => parseLyricTexts(raw));
 }
 
 const meta = { name: '网易', platformId: 'ne', enName: 'netease' };
@@ -367,6 +439,9 @@ export default {
   bootstrapTrack,
   search,
   searchByTitle,
+  searchSongsRaw,
+  getLyricRaw,
+  parseLyricTexts,
   parseUrl,
   getLyric,
 };

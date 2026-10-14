@@ -5,6 +5,8 @@ import Video from 'react-native-video';
 import MusicControl from 'react-native-music-control';
 
 import LApi from '../../api/client';
+import LyrApi from '../../api/lyric';
+import { showToast } from '../../modules/toast';
 import {
   updatePlayer,
   play,
@@ -156,10 +158,9 @@ class BackgroundPlayer extends Component {
     self.setState({ url: '' });
     LApi.bootstrapTrack(trackId).then(url => {
       if (url === '') {
-        // resource not available
-
-        self.props.dispatch(loadFail());
-
+        // resource not available on its own source: try to switch to an
+        // alternative source (kuwo) before giving up and skipping
+        self.tryAlternativeSource(trackId, shouldPlay);
         return;
       }
       self.setState({ url });
@@ -167,6 +168,41 @@ class BackgroundPlayer extends Component {
         self.props.dispatch(play());
       }
     });
+  }
+  // Fallback when the track's own source yields no playable url: fuzzy-match
+  // the same song on kuwo and play that url instead (UI/lyrics unchanged).
+  tryAlternativeSource(trackId, shouldPlay) {
+    const self = this;
+    const track = self.props.playerState.nowplayingTrack;
+    if (!track || track.id !== trackId || track.source === 'kuwo') {
+      showToast('无法播放，已跳过');
+      self.props.dispatch(loadFail());
+      return;
+    }
+    LyrApi.findAlternativeSource(track)
+      .then(alt => {
+        if (!alt || !alt.id) {
+          showToast('无法播放，已跳过');
+          self.props.dispatch(loadFail());
+          return;
+        }
+        return LApi.bootstrapTrack(alt.id).then(altUrl => {
+          if (altUrl === '') {
+            showToast('无法播放，已跳过');
+            self.props.dispatch(loadFail());
+            return;
+          }
+          showToast(`原源无音源，已切换${alt.source || '其它'}源播放`);
+          self.setState({ url: altUrl });
+          if (shouldPlay) {
+            self.props.dispatch(play());
+          }
+        });
+      })
+      .catch(() => {
+        showToast('无法播放，已跳过');
+        self.props.dispatch(loadFail());
+      });
   }
   render() {
     const { url } = this.state;

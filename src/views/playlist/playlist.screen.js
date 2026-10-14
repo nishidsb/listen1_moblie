@@ -1,5 +1,5 @@
 import React from 'react';
-import { FlatList, Text, ActivityIndicator } from 'react-native';
+import { FlatList, Text, ActivityIndicator, View } from 'react-native';
 import { connect } from 'react-redux';
 import styled, { withTheme } from 'styled-components';
 import Icon from 'react-native-vector-icons/MaterialIcons';
@@ -12,6 +12,7 @@ import {
 } from '../../redux/actions';
 import { Flex, RowFlex, TrackRow, AImage } from '../../components';
 import { showToast } from '../../modules/toast';
+import LyrApi from '../../api/lyric';
 
 const PlaylistHeader = styled(RowFlex)`
   padding: 20px;
@@ -64,6 +65,10 @@ class Playlist extends React.Component {
         // info: item.info,
         id: item.info.id,
         loading: true,
+        filling: false,
+        fillDone: 0,
+        fillTotal: 0,
+        fillCancel: false,
       };
     } else {
       this.state = {
@@ -71,10 +76,15 @@ class Playlist extends React.Component {
         tracks: [],
         info: item.info,
         loading: true,
+        filling: false,
+        fillDone: 0,
+        fillTotal: 0,
+        fillCancel: false,
       };
     }
     this.onPressRow = this.onPressRow.bind(this);
     this.popup = this.popup.bind(this);
+    this.onFillLyrics = this.onFillLyrics.bind(this);
   }
 
   componentDidMount() {
@@ -92,6 +102,9 @@ class Playlist extends React.Component {
     });
   }
   shouldComponentUpdate(nextProps, nextState) {
+    if (this.state.filling !== nextState.filling || this.state.fillDone !== nextState.fillDone) {
+      return true;
+    }
     if (this.isMyPlaylist()) {
       if (
         this.getCurrentPlaylist().tracks !==
@@ -137,6 +150,25 @@ class Playlist extends React.Component {
   _keyExtractor = (item) => item.id;
   isMyPlaylist() {
     return this.state.id.startsWith('my');
+  }
+  // Batch-resolve lyrics for every track lacking a cached entry. Runs on the
+  // paced netease queue (~2.5s/song) so it is safe to leave running.
+  onFillLyrics(tracks) {
+    if (this.state.filling) {
+      this.setState({ fillCancel: true });
+      return;
+    }
+    this.setState({ filling: true, fillDone: 0, fillTotal: tracks.length, fillCancel: false });
+    LyrApi.fillPlaylistLyrics(
+      tracks,
+      (done, total) => {
+        this.setState({ fillDone: done, fillTotal: total });
+      },
+      () => this.state.fillCancel
+    ).then(({ done, matched }) => {
+      this.setState({ filling: false });
+      showToast(`歌词补齐完成：${matched}/${done} 首有歌词`);
+    });
   }
   render() {
     let info;
@@ -240,6 +272,53 @@ class Playlist extends React.Component {
                     )}
                   </RowFlex>
                 )}
+                {this.isMyPlaylist() && this.state.loading === false ? (
+                  <RowFlex style={{ paddingLeft: 20, paddingRight: 20, paddingTop: 6 }}>
+                    <ControlButton
+                      style={{ flex: 0, flexBasis: 130 }}
+                      onPress={() => this.onFillLyrics(tracks)}
+                    >
+                      <Icon
+                        name="subtitles"
+                        size={22}
+                        color={this.props.theme.primaryColor}
+                      />
+                      <Text
+                        style={{
+                          marginLeft: 8,
+                          color: this.props.theme.primaryColor,
+                        }}
+                      >
+                        {this.state.filling
+                          ? `取消 ${this.state.fillDone}/${this.state.fillTotal}`
+                          : '补齐歌词'}
+                      </Text>
+                    </ControlButton>
+                    {this.state.filling && this.state.fillTotal > 0 ? (
+                      <View
+                        style={{
+                          flex: 1,
+                          height: 4,
+                          marginLeft: 10,
+                          backgroundColor: this.props.theme.dividerColor || '#DDDDDD',
+                          borderRadius: 2,
+                          overflow: 'hidden',
+                        }}
+                      >
+                        <View
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              (this.state.fillDone / this.state.fillTotal) * 100
+                            ).toFixed(0)}%`,
+                            height: 4,
+                            backgroundColor: this.props.theme.primaryColor,
+                          }}
+                        />
+                      </View>
+                    ) : null}
+                  </RowFlex>
+                ) : null}
               </Flex>
             );
           }}

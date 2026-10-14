@@ -23,6 +23,7 @@ export const TYPE = {
   ADD_TO_MY_PLAYLIST: 'ADD_TO_MY_PLAYLIST',
   ADD_TO_MY_FAVORITE: 'ADD_TO_MY_FAVORITE',
   REMOVE_FROM_MY_FAVORITE: 'REMOVE_FROM_MY_FAVORITE',
+  ATTACH_TRACK_LYRIC: 'ATTACH_TRACK_LYRIC',
   RECOVER_DATA: 'RECOVER_DATA',
 };
 
@@ -122,6 +123,11 @@ export const addToMyFavorite = payload => ({
 export const removeFromMyFavorite = payload => ({
   type: TYPE.REMOVE_FROM_MY_FAVORITE,
   payload,
+});
+// Persist the resolved netease song id (lyric anchor) onto a stored track.
+export const attachTrackLyric = payload => ({
+  type: TYPE.ATTACH_TRACK_LYRIC,
+  payload, // { trackId, neteaseId }
 });
 export const recoverData = payload => ({
   type: TYPE.RECOVER_DATA,

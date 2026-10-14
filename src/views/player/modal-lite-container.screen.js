@@ -15,6 +15,8 @@ import PlaylistPopup from '../playlist/playlist-popup.screen';
 import TrackPopup from '../playlist/track-popup.screen';
 import AddToPlaylistPopup from '../playlist/add-to-playlist-popup.screen';
 import { showToast } from '../../modules/toast';
+import LApi from '../../api/lyric';
+import { attachTrackLyric } from '../../redux/actions';
 
 class ModalLiteContainer extends React.Component {
   props: {
@@ -66,6 +68,16 @@ class ModalLiteContainer extends React.Component {
     this.props.dispatch(addToMyPlaylist(event));
     this.props.dispatch(closeModalLite());
     showToast('添加歌单完成');
+    // Resolve lyrics in the background so the song has them on first play
+    // (any source, incl. bilibili; texts land in the lyric cache).
+    const track = event.payload ? event.payload.track : event.track;
+    if (track && track.source !== 'netease') {
+      LApi.resolveNeteaseId(track).then(neteaseId => {
+        if (neteaseId) {
+          this.props.dispatch(attachTrackLyric({ trackId: track.id, neteaseId }));
+        }
+      });
+    }
   }
   onOpened = () => {
     if (this.props.modalState.liteType === 'nowplaying') {
