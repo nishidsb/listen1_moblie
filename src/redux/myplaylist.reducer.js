@@ -62,11 +62,11 @@ function handleAddToMyPlaylist(state, action) {
   };
 }
 
-// Stamp the resolved netease song id onto every stored copy of a track so
-// future lyric loads skip the search cascade (lyric texts live in the
-// AsyncStorage lyric cache).
+// Stamp the resolved netease song id AND matched song name onto every stored
+// copy of a track. The name is what lets later loads re-verify the match
+// instead of blindly trusting an id that may belong to another song.
 function handleAttachTrackLyric(state, action) {
-  const { trackId, neteaseId } = action.payload;
+  const { trackId, neteaseId, songName } = action.payload;
   const nextDict = {};
   const keys = Object.keys(state.myPlaylistDict);
   let changed = false;
@@ -74,9 +74,9 @@ function handleAttachTrackLyric(state, action) {
     const pl = state.myPlaylistDict[keys[i]];
     let touched = false;
     const tracks = (pl.tracks || []).map(t => {
-      if (t.id === trackId && t.neteaseId !== neteaseId) {
+      if (t.id === trackId && (t.neteaseId !== neteaseId || t.lyricMatchName !== songName)) {
         touched = true;
-        return { ...t, neteaseId };
+        return { ...t, neteaseId, lyricMatchName: songName || '' };
       }
       return t;
     });

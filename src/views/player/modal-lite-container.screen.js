@@ -72,9 +72,16 @@ class ModalLiteContainer extends React.Component {
     // (any source, incl. bilibili; texts land in the lyric cache).
     const track = event.payload ? event.payload.track : event.track;
     if (track && track.source !== 'netease') {
-      LApi.resolveNeteaseId(track).then(neteaseId => {
-        if (neteaseId) {
-          this.props.dispatch(attachTrackLyric({ trackId: track.id, neteaseId }));
+      LApi.resolveMatch(track).then(match => {
+        if (match && match.neteaseId) {
+          this.props.dispatch(
+            attachTrackLyric({
+              trackId: track.id,
+              neteaseId: match.neteaseId,
+              // stored so a later load can re-verify the match
+              songName: match.songName || '',
+            })
+          );
         }
       });
     }

@@ -95,6 +95,9 @@ function searchSongsRaw(keyword) {
           id: song.id,
           name: song.name,
           artists: (song.artists || []).map((a) => a.name),
+          // duration lets the lyric matcher sanity-check candidates
+          duration: song.duration || 0,
+          album: (song.album && song.album.name) || '',
         }));
       }
       if (idx + 1 < endpoints.length && (!resData || resData.code === 405 || resData.code === 406 || resData.code === -460 || resData.code === -462)) {
