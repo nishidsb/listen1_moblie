@@ -207,6 +207,13 @@ function createLyricEngine(adapter) {
       variants.push(`${t} ${strong[0]}`);
     }
 
+    // V2c: a bare episode/part number survives bracket stripping and poisons the
+    // query ("【插曲3】reply" -> "3 reply"). A pure-digit token is never the song
+    // name, so offer the title without it. Keeps "7 rings" intact: that variant
+    // is only an addition, the original one is still tried.
+    const noNum = t.split(' ').filter((x) => !/^\d{1,3}$/.test(x)).join(' ').trim();
+    if (noNum && norm2(noNum) !== norm2(t)) variants.push(noNum);
+
     // V3: first two tokens of V2
     const toks = t.split(' ').filter((x) => norm2(x).length >= 2);
     if (toks.length > 2 && toks.slice(0, 2).join(' ') !== t) variants.push(toks.slice(0, 2).join(' '));
@@ -521,6 +528,22 @@ function createLyricEngine(adapter) {
 
   // Pick the winning candidate out of the scored pool, or null when the
   // evidence is not decisive. Returns { song, score, query } | null.
+  // Two candidates sharing a title are only the same song if their performers
+  // are related. "Reply" exists by kz (超かぐや姫) and by やなぎなぎ; "Remember"
+  // by 林忆莲 and by the 辉夜姬 insert song. Treating same-name as same-song
+  // means silently taking the first of a tie — the exact v2 bug.
+  function artistTie(a, b) {
+    const A = (a || []).map(norm2).filter((x) => x.length >= 2);
+    const B = (b || []).map(norm2).filter((x) => x.length >= 2);
+    if (!A.length || !B.length) return true; // unknown performer → cannot exclude
+    for (let i = 0; i < A.length; i += 1) {
+      for (let j = 0; j < B.length; j += 1) {
+        if (A[i].indexOf(B[j]) !== -1 || B[j].indexOf(A[i]) !== -1) return true;
+      }
+    }
+    return false;
+  }
+
   function decide(pool, ctx) {
     const ranked = [];
     for (const k in pool) {
@@ -530,15 +553,42 @@ function createLyricEngine(adapter) {
     ranked.sort((a, b) => b.score - a.score);
     if (!ranked.length) return null;
     const best = ranked[0];
-    let rival = null;
-    for (let i = 1; i < ranked.length; i += 1) {
-      // versions of the same song ("X (Live)", "X (Remix)") are not rivals
-      if (!sameIdentity(ranked[i].song.name, best.song.name)) { rival = ranked[i]; break; }
+    // Short titles collide across unrelated songs ("Reply", "Remember", "光");
+    // long titles that repeat are overwhelmingly covers of the same song, whose
+    // lyrics are identical, so demanding performer evidence there would only
+    // cost us correct matches.
+    const core = norm2(baseName(best.song.name));
+    const cjkLen = (core.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) || []).length;
+    const tieStrict = cjkLen > 0 ? cjkLen <= 4 : core.length <= 8;
+    // With a short title the tie is broken by the track's own performer field,
+    // which is trustworthy outside bilibili (there it is just the uploader).
+    let head = best;
+    if (tieStrict && ctx.source !== 'bilibili' && ctx.artist) {
+      const ta = norm2(ctx.artist);
+      if (ta.length >= 2) {
+        for (let i = 0; i < ranked.length; i += 1) {
+          const arts = ranked[i].song.artists || [];
+          let hit = false;
+          for (let j = 0; j < arts.length; j += 1) {
+            const na = norm2(arts[j]);
+            if (na.length >= 2 && (na.indexOf(ta) !== -1 || ta.indexOf(na) !== -1)) { hit = true; break; }
+          }
+          if (hit && ranked[i].score >= best.score - AMBIGUITY_GAP) { head = ranked[i]; break; }
+        }
+      }
     }
-    if (rival && best.score - rival.score < AMBIGUITY_GAP && !corroboratedByHighHint(ctx, best.song.artists)) {
+    let rival = null;
+    for (let i = 0; i < ranked.length; i += 1) {
+      if (ranked[i] === head) continue;
+      // versions of the same song ("X (Live)", "X (Remix)" by the same act) are
+      // not rivals; a same-titled song by an unrelated performer is
+      const same = sameIdentity(ranked[i].song.name, head.song.name);
+      if (!same || (tieStrict && !artistTie(ranked[i].song.artists, head.song.artists))) { rival = ranked[i]; break; }
+    }
+    if (rival && head.score - rival.score < AMBIGUITY_GAP && !corroboratedByHighHint(ctx, head.song.artists)) {
       return null; // two different songs, no performer evidence → refuse
     }
-    return best;
+    return head;
   }
 
   // ----------------------------------------------------------------- cascade
@@ -741,7 +791,12 @@ function createLyricEngine(adapter) {
             let rival = null;
             for (let i = 1; i < scored.length; i += 1) {
               const nm = scored[i].song.name || scored[i].song.title;
-              if (!sameIdentity(nm, bestName)) { rival = scored[i]; break; }
+              const same = sameIdentity(nm, bestName);
+              const artsI = scored[i].song.artists || (scored[i].song.artist ? [scored[i].song.artist] : []);
+              if (!same || !artistTie(artsI, best.song.artists || (best.song.artist ? [best.song.artist] : []))) {
+                rival = scored[i];
+                break;
+              }
             }
             const arts = best.song.artists || (best.song.artist ? [best.song.artist] : []);
             if (!rival || best.score - rival.score >= AMBIGUITY_GAP || corroboratedByHighHint(ctx, arts)) {
