@@ -1,5 +1,7 @@
 # Listen1 Mobile — 增强版
 
+> **AI 作品声明**：本 fork 的全部增强修改（歌词错配修复 v2/v3、自动补词、B 站音源等）由 AI（腾讯 WorkBuddy 智能体）在人类指导下编写；上游 Listen1 代码归原作者所有。
+
 > 一个聚合多家音乐源的免费音乐播放器（iOS / Android），基于 [Listen1 Mobile](https://github.com/listen1/listen1_mobile) 二次增强。
 
 本项目是开源项目 **Listen1** 移动端（React Native）的一个**本地增强分支**。它完整保留了原版架构与界面，并针对“个人存档迁移 + 可完整播放 + 文件级备份恢复”做了三类增强。
